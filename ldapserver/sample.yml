@@ -1,0 +1,81 @@
+---
+- hosts: node
+  remote_user: centos
+  become_method : sudo
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    - name: Disable SELinux for now
+      shell: setenforce 0
+      ignore_errors: yes
+
+    - name: Disable SELinux permanently
+      lineinfile: dest=/etc/sysconfig/selinux regexp="SELINUX=" line="SELINUX=disabled"
+
+    - name: To remove sssd-client
+      yum: name={{item}} state=absent
+      with_items:
+        - sssd-client
+        - ipa-admintools      
+        - ipa-client          
+        - ipa-server          
+        - ipa-server-selinux  
+        - sssd                
+        - sssd-ad             
+        - sssd-common         
+        - sssd-common-pac     
+        - sssd-dbus           
+        - sssd-ipa            
+        - sssd-krb5           
+        - sssd-krb5-common    
+        - sssd-ldap           
+        - sssd-proxy   
+
+    - name: To install openldap-clients, openldap and nss-pam-ldapd
+      yum: name={{item}} state=present
+      with_items:
+        - openldap-clients 
+        - openldap 
+        - nss-pam-ldapd
+   
+    - name: Configure machine as LDAP client
+      shell: authconfig --enableldap --enableldapauth --ldapserver=ldap.barjatiya.com --ldapbasedn="ou=Users,dc=sbarjatiya,dc=com" --enablelocauthorize --enablepamaccess --enablemkhomedir --enablecachecreds --enablecache --updateall
+
+#Use only on CentOS 6.*,  On CentOS 7 or Fedora-20 this would fail
+#    - name: Set LDAP bind policy to soft
+#      lineinfile: dest=/etc/pam_ldap.conf regexp="^bind_policy" line="bind_policy soft"
+
+    - name: Replace nsswitch.conf as it is not getting configured properly by authconfig
+      copy: src=/home/ubuntu/ldap_server/ldapserver/nsswitch.conf dest=/etc/nsswitch.conf owner=root group=root mode=644
+
+    - name: Replace all references to sss in pam.d
+      shell: cd /etc/pam.d; sed -i 
+
+    - name: Enable nscd on system boot
+      service: name=nscd enabled=yes state=started
+
+#Replace folder list with appropriate base folder names.  For example if LDAP user saurabh's home folder is /rekall/saurabh then /rekall folder should be created 
+#using this task
+
+    - name: Create the directories on each machine 
+      file: path={{item}} state=directory mode=755
+      with_items:
+        - /courses
+        - /home1
+        - /students
+
+#Adjust this line as per lab-machine OS.  Also test it on few machines and edit appropriately.  The final output should be name of interface to be brought up using DHCP on boot for ansible-pull mechanism.
+#Feodra 20 line
+#    - shell: ifconfig | grep mtu  | sed 's/:.*$//g' | grep [0-9]
+#CentOS-7 line
+#    - shell: ifconfig | grep mtu | grep [ep][n0-9]p[0-9] | sed 's/:.*$//g'
+#CentOS6 line
+#    - shell: ifconfig | grep Link| grep HW | sed 's/ .*$//g'
+      register: ifconfig_output
+
+    - name: Copy the rc.local for DHCP and sss configuration on boot
+      template: src=/home/ubuntu/ldap_server/ldapserver/rc.local dest=/etc/rc.d/rc.local mode=777
+
+    - name: Disable management of {{ifconfig_output.stdout}} by network-manager (Possibly disconnects current ansible session)
+      shell: 'echo NM_CONTROLLED="no" >> /etc/sysconfig/network-scripts/ifcfg-{{ifconfig_output.stdout}}'

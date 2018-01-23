@@ -1,0 +1,25 @@
+---
+- name: Create a sandbox instance
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    key_name: rdops
+    instance_type: t2.micro
+    security_group: rdops-sg
+    image: ami-25250840
+    region: us-east-2
+  tasks:
+    - name: Terminate instance
+      ec2:
+        key_name: "{{ key_name }}"
+        group: "{{ security_group }}"
+        instance_type: "{{ instance_type }}"
+        image: "{{ image }}"
+        wait: true
+        region: "{{ region }}"
+        vpc_subnet_id: subnet-a3421cca
+        assign_public_ip: yes
+        state: 'absent'
+        instance_ids: '{{ ec2.instance_ids }}'
+      register: ec2

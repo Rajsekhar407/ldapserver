@@ -1,0 +1,115 @@
+---
+- hosts: node
+  remote_user: centos
+  become_method : sudo
+  become: yes
+  gather_facts: yes
+
+  tasks: 
+  - name: Configure EPEL repository
+    yum: name=epel-release state=present
+
+  - name: Install packages
+    yum: name={{item}} state=present
+    with_items:
+      - 389-ds-base
+      - 389-admin
+      - openldap-clients
+
+  - name: Configure sysctl variables
+    sysctl: name={{item.name}}  value={{item.value}} sysctl_set=yes state=present
+    with_items:
+      - {name: net.ipv4.tcp_keepalive_time, value: 300}
+      - {name: net.ipv4.ip_local_port_range, value: "1024 65000"}
+      - {name: fs.file-max, value: 64000}
+
+  - name: Configure file descriptors for dirsrv systemd service
+    lineinfile:
+      dest=/etc/sysconfig/dirsrv.systemd
+      state=present
+      insertafter="^[Service]"
+      line=LimitNOFILE=8192
+
+  - name: Configure group ldap
+    group: name=ldap gid=555
+
+  - name: Configure user ldap
+    user: name=ldap comment="Dirsrv user" uid=555 group=ldap shell=/sbin/nologin
+
+  - name: Configuring SELinux
+    selinux: policy=targeted state=permissive
+
+#  - block:
+#     - name: Check that server is already installed
+#       command: systemctl is-enabled dirsrv@{{ serverid }}
+#       register: results_raw
+#       changed_when: false
+
+  - rescue:
+     - name: Copy installation template
+       template: src=templates/ldap.inf.j2 dest=/root/ldap.inf
+
+     - name: Run installation script setup-ds-admin.pl
+       shell: /usr/sbin/setup-ds-admin.pl -s -f /root/ldap.inf
+
+#  - name: Generate password hash for replication user
+#    shell: /usr/bin/pwdhash "{{ replication_user_password }}"
+#    register: pwd_hash_raw
+
+#  - name: Make a pwd hash variable
+#    set_fact: pwd_hash= "{{ pwd_hash_raw.stdout }}"
+
+  - name: Copy ldif templates
+    template: src=templates/{{ item }}.j2 dest=/root/{{ item }}
+    with_items:
+     - consumer_replica.ldif
+     - replication_user.ldif
+
+  - name: Add replication user
+    shell: ldapmodify -D {{ rootdn }} -w {{ password }} -h localhost -v < /root/replication_user.ldif
+    register: results
+    failed_when: not((results.rc == 0)or("'Already exists' in results.sterr")
+    changed_when: results.rc == 0
+
+  - name: Configure consumer replica
+    shell: ldapmodify -D {{ rootdn }} -w {{ password }} -h localhost -v < /root/consumer_replica.ldif
+    register: results
+    failed_when: not((results.rc == 0)or("'Already exists' in results.stderr")
+    when: not supplier
+    changed_when: results.rc == 0
+
+  - name: Copy installation templates
+    template: src=templates/{{ item }}.j2 dest=/root/{{ item }}
+    with_items:
+     - supplier_changelog.ldif
+     - supplier_replica.ldif
+     - supplier_replication_agreement.ldif
+     - supplier_init_consumer.ldif
+
+  - name: Configure replication supplier changelog
+    shell: ldapmodify -D {{ rootdn }} -w {{ password }} -h localhost -v < /root/supplier_changelog.ldif
+    register: results
+    failed_when: not((results.rc == 0)or("'Already exists') in results.stderr")
+    changed_when: results.rc == 0
+
+  - name: Configuring replication supplier replica
+    shell: ldapmodify -D {{ rootdn }} -w {{ password }} -h localhost -v < /root/supplier_replica.ldif
+    register: results
+    failed_when: not((results.rc == 0)or("'Already exists' in results.stderr")or("'replica already configured for' in results.stdeer"))
+    changed_when: results.rc == 0
+
+  - name: Configuring replication agreement
+    shell: ldapmodify -D {{ rootdn }} -w {{ password }} -h localhost -v < /root/supplier_replication_agreement.ldif
+    register: results
+    failed_when: not((results.rc == 0)or("'Already exists' in results.stderr"))
+    changed_when: results.rc == 0
+
+  - name: Initializing consumer from supplier
+    shell: ldapmodify -D {{ rootdn }} -w {{ password }} -h localhost -v < /root/supplier_init_consumer.ldif
+    register: results
+    failed_when:  not((results.rc == 0)or("'Already exists' in results.stderr"))
+    when: init_consumer
+    changed_when: results.rc == 0
+
+#  - include: cleanup.yml
+

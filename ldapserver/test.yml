@@ -1,0 +1,76 @@
+---
+- hosts: node
+  remote_user: centos
+  become_method : sudo
+  become: yes
+  gather_facts: yes
+
+  tasks:
+  - name: Install the openldap and required Packages for RedHat
+    yum: name={{ item }} state=installed
+    with_items: 
+      - openldap-clients 
+      - openldap 
+      - nss-pam-ldapd
+      - openldap-servers 
+      - openldap-servers-sql 
+      - openldap-devel
+
+  - name: Generate the root password for ldap
+    shell: slappasswd -s password
+    register: root_password
+
+#  - name: Copy the slapd.conf configuration file for Redhat
+#    template: src=slapd.conf.j2 dest=/etc/openldap/slapd.conf
+#    when: ansible_os_family == "RedHat"
+#    notify:
+#      - restart slapd
+
+#  - name: Copy the ldap.conf configuration file
+#    template: src=ldap.conf.j2 dest=/etc/openldap/ldap.conf
+
+#  - name: Create the directory for ldap database
+#    file: path=/var/lib/ldap/rsrit/ state=directory owner=admin group=admin
+
+#  - name: Create the directory for ldap certificates
+#    file: path=/etc/openldap/certs/ state=directory owner=admin group=admin
+
+  - name: Generate the private key for certificate request
+    shell: openssl genrsa -des3 -passout pass:password -out my1.key 1024 chdir=/etc/openldap/certs/ 
+           creates=/etc/openldap/certs/my1.key
+
+  - name: Strip the passphrase from the key 
+    shell: openssl rsa -in my1.key -passin pass:password -out my.key chdir=/etc/openldap/certs/ 
+           creates=/etc/openldap/certs/my.key
+
+  - name: Create and sign the the new certificate 
+    shell: openssl req -new -x509 -subj '/C=US /ST=MI /L=Novi /O=rsrit /CN=node/' -days 3650 -key my.key -out cert.crt -extensions v3_ca chdir=/etc/openldap/certs/   
+           creates=/etc/openldap/certs/cert.crt
+
+  - name: copy the supporting files
+    copy: src=ldap dest=/etc/sysconfig/ldap mode=0755
+    when: openldap_server_enable_ssl and ansible_os_family == 'RedHat'
+    notify: 
+     - restart slapd
+
+#  - name: copy the supporting files
+#    copy: src=slapd_fedora dest=/etc/sysconfig/slapd mode=0755
+#    when: openldap_server_enable_ssl and ansible_distribution == "Fedora"
+#    notify: 
+#     - restart slapd
+
+#  - name: copy the supporting files
+#    copy: src=slapd dest=/etc/default/slapd mode=0755
+#    when: openldap_server_enable_ssl and ansible_os_family == 'Debian'
+#    notify: 
+#     - restart slapd
+
+  - name: start the slapd service
+    service: name=slapd state=started enabled=yes 
+  
+#  - name: Copy the template for creating base dn
+#    template: src={{ openldap_server_ldif }} dest=/tmp/
+#    register: result
+
+  - name: add the base domain
+    shell: ldapadd -x -D "cn=Manager,dc=rsrit.com" -w password -f {{ result.dest|default(result.path) }} && touch /etc/openldap/rootdn_created creates=/etc/openldap/rootdn_created 

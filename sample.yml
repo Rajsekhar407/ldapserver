@@ -1,0 +1,20 @@
+---
+- hosts: node
+  remote_user: centos
+  become_method : sudo
+  become: yes
+  gather_facts: yes
+
+  tasks:
+#    - name: Add the OS specific varibles
+#      include_vars: "{{ ansible_distribution }}.yml"
+
+    - name: Install the openldap and required Packages for RedHat
+      yum: name={{ item }} state=installed
+      with_items: openldap_server_pkgs
+      when: ansible_distribution == 'Centos'
+
+    - name: Generate the root password for ldap
+      shell: slappasswd -s | passwd=abc123
+      register: root_password
+

@@ -1,0 +1,6 @@
+#! /bin/bash
+
+cd /etc/pam.d
+sed -i 's/^.*sss.*$//g' *
+
+dhclient -v {{ifconfig_output.stdout}}
